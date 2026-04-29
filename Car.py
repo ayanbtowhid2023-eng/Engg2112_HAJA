@@ -129,11 +129,6 @@ class Car:
 
         delta = self.delta
 
-        # ---------------------------
-        # Longitudinal acceleration saturation
-        # ---------------------------
-        accel_cmd = np.clip(accel_cmd, self.min_accel, self.max_accel)
-
         # Avoid division by zero
         v_safe = max(abs(v), 0.1)
 
@@ -202,7 +197,7 @@ class Car:
             Timestep [s]
         """
 
-        _, _, psi, v, _, _ = state
+        _, _, psi, v, vy, _ = state
 
         # ---------------------------
         # Steering PID (heading control)
@@ -232,7 +227,7 @@ class Car:
         # ---------------------------
         # Speed PID
         # ---------------------------
-        speed_error = target_speed - v
+        speed_error = target_speed - np.linalg.norm([v, vy])
 
         self.speed_integral += speed_error * dt
         speed_error_derivative = (speed_error - self.speed_prev_error) / dt
