@@ -22,70 +22,110 @@ import csv
 #     "simulation_error"
 # ])
 
-num_simulations = 1500
+num_simulations = 1
 
 cars = []
 
 rng = np.random.default_rng()
+    
+def generate_reference_profile(N, dt, rng):
+    """
+    Generate a seeded target speed and heading profile.
+    Structure: alternating transition and hold segments.
+    """
+    T = N * dt
+    times = np.arange(N) * dt
 
-def get_target_speed(t):
-    if t < 20:
-        return 20.0
-    elif t < 40:
-        return 20.0 + (30.0 - 20.0) * (t - 20.0) / 20.0
-    elif t < 60:
-        return 30.0
-    elif t < 62:
-        return 30 - (30-15) * (t-60)/2
-    elif t < 70:
-        return 15.0
-    elif t < 71.5:
-        return 15 + (25 - 15) * (t - 70.0) / 1.5
-    else:
-        return 25.0
+    # --- Speed profile ---
+    # Randomise the speed levels and transition times but keep hold sections
+    speeds = [
+        rng.uniform(15.0, 25.0),   # initial hold speed
+        rng.uniform(25.0, 35.0),   # second level
+        rng.uniform(10.0, 20.0),   # drop
+        rng.uniform(20.0, 30.0),   # final level
+    ]
 
-def smooth_step_turn(t, t0, t1, angle_deg):
-    s = (t - t0) / (t1 - t0)
-    s = np.clip(s, 0.0, 1.0)
-    return np.radians(angle_deg) * 0.5 * (1 - np.cos(np.pi * s))
+    # Transition durations and hold durations
+    hold_dur   = [rng.uniform(12.0, 20.0) for _ in range(4)]  # hold each level
+    trans_dur  = [rng.uniform(2.0,  6.0)  for _ in range(3)]  # ramp between levels
 
-def get_target_heading(t):
-    if t < 15:
-        return 0.0
+    speed_profile = np.zeros(N)
+    t_cursor = 0.0
 
-    # sharper ramp up to +20 deg
-    elif t < 22:
-        return smooth_step_turn(t, 15, 22, 20)
+    def smooth_interp(t, t0, t1, v0, v1):
+        s = np.clip((t - t0) / (t1 - t0), 0.0, 1.0)
+        return v0 + (v1 - v0) * 0.5 * (1 - np.cos(np.pi * s))
 
-    # hold turn
-    elif t < 28:
-        return np.radians(20)
+    current_speed = speeds[0]
+    segments = []
 
-    # sharper transition to -18 deg
-    elif t < 38:
-        s = (t - 28) / (38 - 28)
-        return np.radians(20 + (-18 - 20) * 0.5 * (1 - np.cos(np.pi * s)))
+    # Build segment list: (start_t, end_t, type, from_val, to_val)
+    t = 0.0
+    for i in range(len(speeds)):
+        segments.append((t, t + hold_dur[i], 'hold', speeds[i], speeds[i]))
+        t += hold_dur[i]
+        if i < len(speeds) - 1:
+            segments.append((t, t + trans_dur[i], 'ramp', speeds[i], speeds[i+1]))
+            t += trans_dur[i]
 
-    # hold opposite turn
-    elif t < 45:
-        return np.radians(-18)
+    for i in range(N):
+        ti = times[i]
+        val = speeds[0]
+        for (t0, t1, kind, v0, v1) in segments:
+            if t0 <= ti < t1:
+                if kind == 'hold':
+                    val = v0
+                else:
+                    val = smooth_interp(ti, t0, t1, v0, v1)
+                break
+            val = segments[-1][3]  # after all segments, hold last value
+        speed_profile[i] = val
 
-    # transition to +15 deg
-    elif t < 55:
-        s = (t - 45) / (55 - 45)
-        return np.radians(-18 + (15 + 18) * 0.5 * (1 - np.cos(np.pi * s)))
+    # --- Heading profile ---
+    max_angle = rng.uniform(15.0, 30.0)   # peak turn angle in degrees
 
-    # hold
-    elif t < 65:
-        return np.radians(15)
+    # Randomise turn angles (signed) and timing
+    angles_deg = [0.0]
+    for _ in range(4):
+        sign = rng.choice([-1, 1])
+        angles_deg.append(float(sign * rng.uniform(10.0, max_angle)))
+    angles_deg.append(0.0)  # always return to zero at end
 
-    # return to zero
-    elif t < 72:
-        s = (t - 65) / (72 - 65)
-        return np.radians(15 * 0.5 * (1 + np.cos(np.pi * s)))
+    h_hold_dur  = [rng.uniform(8.0,  16.0) for _ in range(len(angles_deg))]
+    h_trans_dur = [rng.uniform(4.0,  8.0)  for _ in range(len(angles_deg) - 1)]
 
-    else:
-        return 0.0
+    heading_segments = []
+    t = 0.0
+    for i in range(len(angles_deg)):
+        heading_segments.append((t, t + h_hold_dur[i], 'hold',
+                                  np.radians(angles_deg[i]),
+                                  np.radians(angles_deg[i])))
+        t += h_hold_dur[i]
+        if i < len(angles_deg) - 1:
+            heading_segments.append((t, t + h_trans_dur[i], 'ramp',
+                                      np.radians(angles_deg[i]),
+                                      np.radians(angles_deg[i+1])))
+            t += h_trans_dur[i]
+
+    heading_profile = np.zeros(N)
+    for i in range(N):
+        ti = times[i]
+        val = np.radians(angles_deg[0])
+        for (t0, t1, kind, v0, v1) in heading_segments:
+            if t0 <= ti < t1:
+                if kind == 'hold':
+                    val = v0
+                else:
+                    s = np.clip((ti - t0) / (t1 - t0), 0.0, 1.0)
+                    val = v0 + (v1 - v0) * 0.5 * (1 - np.cos(np.pi * s))
+                break
+            val = heading_segments[-1][3]
+        heading_profile[i] = val
+
+    return {
+        "target_speeds":   speed_profile,
+        "target_headings": heading_profile,
+    }
 
 def generate_disturbance_profile(N, dt, rng):
     """Pre-generate a full disturbance sequence so it can be replayed."""
@@ -346,20 +386,22 @@ disturbance_profiles = [
     for seed in range(N2)
 ]
 
+target_profile = [
+    generate_reference_profile(N, dt, np.random.default_rng(seed))
+    for seed in range(N2)
+]
+
 for car in cars:
 
     avg_error = 0
 
     for _ in range(N2):
         car.reset_pid()
-        state = np.array([0.0, 0.0, 0.0, 20, 0.0, 0.0])
 
         states = []
         steers = []
         accels = []
         times = []
-        target_speeds = []
-        target_headings = []
         psis = []
 
         t = 0
@@ -367,19 +409,26 @@ for car in cars:
         # Retained disturbance histories
 
         profile = disturbance_profiles[_]
+        profile_targets = target_profile[_]
 
         err_accumulative = 0.0
 
-        wind_longs      = profile["wind_longs"]
-        wind_lats       = profile["wind_lats"]
-        wind_yaws       = profile["wind_yaws"]
-        road_grades     = profile["road_grades"]
+        wind_longs = profile["wind_longs"]
+        wind_lats = profile["wind_lats"]
+        wind_yaws = profile["wind_yaws"]
+        road_grades = profile["road_grades"]
+        target_speeds = profile_targets["target_speeds"]
+        target_headings = profile_targets["target_headings"]
+
+        state = np.array([0.0, 0.0, 0.0, target_speeds[0], 0.0, 0.0])
 
         for i in range(N):
             wind_long      = wind_longs[i]
             wind_lat       = wind_lats[i]
             wind_yaw       = wind_yaws[i]
             road_grade     = road_grades[i]
+            target_speed   = target_speeds[i]
+            target_heading = target_headings[i]
 
 
             # =========================================================
@@ -387,8 +436,8 @@ for car in cars:
             # =========================================================
             state, steer_cmd, accel_cmd = car.controlled_step(
                 state=state,
-                target_heading=get_target_heading(t),
-                target_speed=get_target_speed(t),
+                target_heading=target_heading,
+                target_speed=target_speed,
                 dt=dt
             )
 
@@ -417,8 +466,8 @@ for car in cars:
             # =========================================================
             # 6. Performance metric
             # =========================================================
-            speed_err   = abs(get_target_speed(t) - np.linalg.norm([v, vy]))
-            heading_err = abs(car.wrap_angle(psi - get_target_heading(t)))
+            speed_err   = abs(target_speed - np.linalg.norm([v, vy]))
+            heading_err = abs(car.wrap_angle(psi - target_heading))
 
             err_accumulative += (speed_err + 10.0 * heading_err) * dt
 
@@ -429,8 +478,6 @@ for car in cars:
             steers.append(steer_cmd)
             accels.append(accel_cmd)
             times.append(t)
-            target_speeds.append(get_target_speed(t))
-            target_headings.append(get_target_heading(t))
             psis.append(psi)
 
             t += dt
@@ -445,10 +492,12 @@ for car in cars:
         wind_longs = np.array(wind_longs)
         wind_lats = np.array(wind_lats)
         wind_yaws = np.array(wind_yaws)
+        target_headings = np.array(target_headings)
+        target_speeds = np.array(target_speeds)
 
         avg_error += err_accumulative / N2
 
-    print_compact(car, err_accumulative)
+    # print_compact(car, err_accumulative)
 
     # writer.writerow([
     #     f"{car.m:.2f}",
@@ -469,17 +518,17 @@ for car in cars:
     #     f"{avg_error:.2f}"
     # ])
 
-    if avg_error > 0:
-        plot_drive_conditions_stacked(
-        times=times,
-        states=states,
-        target_speeds=target_speeds,
-        wind_longs=wind_longs,
-        wind_lats=wind_lats,
-        road_grades=road_grades,
-        target_headings = target_headings,
-        psis = psis
-    )
+        if avg_error > 0:
+            plot_drive_conditions_stacked(
+            times=times,
+            states=states,
+            target_speeds=target_speeds,
+            wind_longs=wind_longs,
+            wind_lats=wind_lats,
+            road_grades=road_grades,
+            target_headings = target_headings,
+            psis = psis
+        )
 
 # csv_file.close()
 plt.show()
