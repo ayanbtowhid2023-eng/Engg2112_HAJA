@@ -1,10 +1,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import mean_absolute_error, r2_score
 from Car import Car
-from ML import PIDSurrogateModel
-from ML import predict_optimal_pid
+from ML import predict_optimal_pid, DirectPIDModel 
 
 def get_target_speed(t):
     if t < 20:
@@ -64,6 +62,22 @@ def get_target_heading(t):
 
     else:
         return 0.0
+
+def print_compact(car):
+    print("Car parameters:")
+    print(" m    max_a  Iz     L     Cf     Cr     mu    Cd     A")
+    print(
+        f"{car.m:.0f}, {car.max_accel:.2f}, {car.Iz:.0f}, {car.L:.2f}, "
+        f"{car.Cf:.0f}, {car.Cr:.0f}, {car.mu:.2f}, "
+        f"{car.Cd:.2f}, {car.A:.2f}\n"
+        )
+    
+    print("Slected PID values:")
+    print(" p_s     i_s    d_s    p_v   i_v   d_v")
+    print(
+        f"{car.kp_steer:.2f}, {car.ki_steer:.2f}, {car.kd_steer:.2f}, "
+        f"{car.kp_speed:.2f}, {car.ki_speed:.2f}, {car.kd_speed:.2f},\n"
+    )
 
 def plot_drive_conditions_stacked(times, states, target_speeds, wind_longs, wind_lats, road_grades, target_headings, psis):
     """
@@ -190,7 +204,7 @@ Cr = c_alpha_scale_rear * Fz_rear
 # 4. Steering limits
 # -------------------------------------------------
 # Smaller wheelbase cars tend to steer a bit more sharply
-base_max_steer_deg = 35.0 - 4.0 * (L - 2.4) / (3.2 - 2.4)
+base_max_steer_deg = np.clip(35.0 - 4.0 * (L - 2.4) / (3.2 - 2.4), 25.0, 45.0)
 max_steer_angle = np.radians(base_max_steer_deg)
 
 # Steering rate also varies, but keep it realistic
@@ -200,23 +214,31 @@ max_steer_rate = np.radians(90)
 # 5. Longitudinal capability
 # -------------------------------------------------
 # Use acceleration capability ranges typical of passenger vehicles
-max_accel = rng.uniform(0.8, 9.0) 
 min_accel = -6  
 
+# -------------------------------------------------
+# Predict PID gains directly from car parameters
+# using the two offline-trained DirectPIDModel instances
+# (steer model: car params -> steering PID,
+#  speed model: car params -> speed PID).
+# No simulation or optimisation is run here.
+# -------------------------------------------------
+car_params = {
+    "mass":                           m,
+    "max_acceleration":               max_accel,
+    "yaw_inertia":                    Iz,
+    "length":                         L,
+    "max_steering_stiffness_front":   Cf,
+    "max_steering_stiffness_rear":    Cr,
+    "tyre_friction":                  mu,
+    "cd":                             Cd,
+    "cross_sectional_area":           A,
+}
+
 result = predict_optimal_pid(
-    car_params={
-        "mass":                           m,
-        "max_acceleration":               max_accel,
-        "yaw_inertia":                    Iz,
-        "length":                         L,
-        "max_steering_stiffness_front":   Cf,
-        "max_steering_stiffness_rear":    Cr,
-        "tyre_friction":                  mu,
-        "cd":                             Cd,
-        "cross_sectional_area":           A,
-    },
-    model_path="pid_surrogate_2.pkl",
-    method="local",
+    car_params=car_params,
+    steer_model_path="direct_steer_pid_model.pkl",
+    speed_model_path="direct_speed_pid_model.pkl",
 )
 
 steer_kp = result["steer_kp"]
@@ -253,7 +275,8 @@ T = 90.0
 N = int(T / dt)
 N2 = 5
 
-avg_error = 0
+avg_speed_error = 0
+avg_heading_error = 0
 
 for _ in range(N2):
     car.reset_pid() 
@@ -273,7 +296,8 @@ for _ in range(N2):
     wind_lats = []
     wind_yaws = []
 
-    err_accumulative = 0.0
+    speed_err_accumulative = 0
+    heading_err_accumulative = 0
 
     # ---------------------------
     # Disturbance initial values
@@ -305,6 +329,10 @@ for _ in range(N2):
     wind_phase_yaw  = rng.uniform(0.0, 2 * np.pi)
     road_phase = rng.uniform(0.0, 2 * np.pi)
     lane_phase = rng.uniform(0.0, 2 * np.pi)
+
+    times_hp = np.arange(0, T + dt, dt)
+    heading_profile = np.array([get_target_heading(times_hp[j]) for j in range(N)])
+    target_yaw_rates = np.gradient(heading_profile, dt)
 
     for i in range(N):
         t = i * dt
@@ -350,10 +378,11 @@ for _ in range(N2):
         a_grade = -9.81 * np.sin(road_grade)
 
         # Apply disturbed accelerations directly to the state
-        v  += (a_grade + wind_long) * dt
+        v += (a_grade + wind_long) * dt
         vy += wind_lat * dt
-        r  += wind_yaw * dt
+        r += wind_yaw * dt
 
+        psi += r * dt  
         # Update heading after yaw disturbance
         psi = car.wrap_angle(psi)
 
@@ -365,10 +394,15 @@ for _ in range(N2):
         # =========================================================
         # 6. Performance metric
         # =========================================================
-        speed_err   = abs(get_target_speed(t) - np.linalg.norm([v, vy]))
-        heading_err = abs(car.wrap_angle(psi - get_target_heading(t)))
+        target_yaw_rate = target_yaw_rates[i]
+        actual_yaw_rate = state[5]  # r is index 5 in [x, y, psi, v, vy, r]
 
-        err_accumulative += (speed_err + 10.0 * heading_err) * dt
+        speed_err    = abs(target_speed - np.linalg.norm([v, vy]))
+        heading_err  = abs(car.wrap_angle(psi - get_target_heading(t)))
+        yaw_rate_err = abs(actual_yaw_rate - target_yaw_rate)
+
+        speed_err_accumulative   += speed_err * dt
+        heading_err_accumulative += (heading_err * 8.0 + yaw_rate_err * 5.0) * dt
 
         # =========================================================
         # 7. Store results
@@ -387,8 +421,8 @@ for _ in range(N2):
         wind_lats.append(wind_lat)
         wind_yaws.append(wind_yaw)
 
-    avg_error += err_accumulative / N2
-
+    avg_speed_error += speed_err_accumulative / N2
+    avg_heading_error += heading_err_accumulative / N2
 
 plot_drive_conditions_stacked(
     times=times,
@@ -403,5 +437,6 @@ plot_drive_conditions_stacked(
         
 
 print("\n")
-print("Dynamic Model acculumative error = ", avg_error)
+print_compact(car)
+print(f"Dynamic Model acculumative error = {avg_speed_error:.2f}, {avg_heading_error:.2f}\n")
 plt.show()
