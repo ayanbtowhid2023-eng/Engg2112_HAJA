@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Tuple
 
 import joblib
+import json
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -102,6 +103,7 @@ def add_car_derived_features(X: pd.DataFrame) -> pd.DataFrame:
     X["drag_to_mass"] = X["aero_drag_proxy"] / (X["mass"] + 1e-9)
 
     return X
+
 
 
 # -----------------------------------------------------------------------------
@@ -209,6 +211,30 @@ class DirectPIDModel:
     def save(self, path: str) -> None:
         joblib.dump(self, path)
         print(f"Model saved -> {path}")
+    
+    def feature_importance(self, save_path: str | None = None) -> pd.DataFrame:
+        """
+        Extract per-target feature importances from the fitted MultiOutputRegressor.
+        Returns a DataFrame with features as rows and target PID gains as columns.
+        Optionally saves the DataFrame to a CSV file at save_path.
+        """
+        if self.model is None or self.feature_names is None:
+            raise RuntimeError("Model has not been fitted or loaded.")
+
+        regressor = self.model.named_steps["regressor"]
+
+        importance_dict = {}
+        for estimator, target_col in zip(regressor.estimators_, self.target_cols):
+            importance_dict[target_col] = estimator.feature_importances_
+
+        df = pd.DataFrame(importance_dict, index=self.feature_names)
+        df.index.name = "feature"
+
+        if save_path is not None:
+            df.to_csv(save_path)
+            print(f"Feature importance saved -> {save_path}")
+
+        return df
 
     @staticmethod
     def load(path: str) -> "DirectPIDModel":
@@ -274,6 +300,26 @@ def train_direct_pid_models(
     speed_metrics = speed_model.evaluate(X_test, yv_test)
     speed_model.save(speed_model_path)
 
+    steer_importance = steer_model.feature_importance(save_path="steer_feature_importance.csv")
+    speed_importance = speed_model.feature_importance(save_path="speed_feature_importance.csv")
+    print('\n')
+    print(steer_importance.round(4))
+    print('\n')
+    print(speed_importance.round(4))
+
+    diagnostics = {
+        "X_test":        X_test[CAR_PARAM_COLS].to_dict(orient="list"),
+        "ys_test":       ys_test.to_dict(orient="list"),
+        "yv_test":       yv_test.to_dict(orient="list"),
+        "steer_pred":    steer_model.predict(X_test).to_dict(orient="list"),
+        "speed_pred":    speed_model.predict(X_test).to_dict(orient="list"),
+    }
+
+    diag_path = "training_diagnostics.json"
+    with open(diag_path, "w") as f:
+        json.dump(diagnostics, f)
+    print(f"Diagnostics saved -> {diag_path}")
+
     return {
         "steer_model": steer_model,
         "speed_model": speed_model,
@@ -311,7 +357,7 @@ def predict_optimal_pid(
 
 if __name__ == "__main__":
     train_direct_pid_models(
-        csv_path = os.path.join(os.path.dirname(__file__), 'First150Good.csv'),
+        csv_path = os.path.join(os.path.dirname(__file__), 'MasterDocCSV.csv'),
         steer_model_path="direct_steer_pid_model.pkl",
         speed_model_path="direct_speed_pid_model.pkl",
     )
