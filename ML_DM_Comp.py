@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from Car import Car
-from ML import predict_optimal_pid, DirectPIDModel  
+from ML_rewrite import predict_optimal_pid, DirectPIDModel  
 
 def get_target_speed(t):
     if t < 20:
