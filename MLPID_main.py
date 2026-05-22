@@ -1,3 +1,5 @@
+# MLPID_main.py
+
 """
 Offline Optimal PID Dataset Generator
 =====================================
@@ -37,7 +39,7 @@ from ML import CAR_PARAM_COLS, train_direct_pid_models
 
 OUTPUT_CSV = "optimal_pid_dataset.csv"
 
-NUM_CARS = 500     
+NUM_CARS = 10     
 N_PROFILE_RUNS = 5    
 DT = 0.02        
 T = 90                  

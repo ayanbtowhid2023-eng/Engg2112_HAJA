@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AutoPID — ML Steering Controller</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+<style>
+  /* ─── Design tokens ─────────────────────────────────────────────────────── */
+  :root {
+    --bg:        #0a0c10;
+    --surface:   #12151c;
+    --card:      #181d27;
+    --border:    #252b38;
+    --accent:    #e8ff47;
+    --accent2:   #47c8ff;
+    --danger:    #ff4757;
+    --success:   #2ecc71;
+    --text:      #e8eaf0;
+    --muted:     #6b7485;
+    --mono:      'Space Mono', monospace;
+    --sans:      'Syne', sans-serif;
+    --radius:    6px;
+    --transition: 0.18s ease;
+  }
+
+  /* ─── Reset & base ──────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ─── Noise overlay ─────────────────────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; pointer-events: none; z-index: 999;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    opacity: 0.4;
+  }
+
+  /* ─── Grid background ───────────────────────────────────────────────────── */
+  body::after {
+    content: '';
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 48px 48px;
+    opacity: 0.25;
+  }
+
+  /* ─── Layout ────────────────────────────────────────────────────────────── */
+  .page { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; }
+
+  /* ─── Header ────────────────────────────────────────────────────────────── */
+  header {
+    padding: 52px 0 40px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .logo-block { display: flex; flex-direction: column; gap: 4px; }
+  .logo-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+  header h1 {
+    font-size: clamp(36px, 5vw, 60px);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+  header h1 span { color: var(--accent); }
+  .header-desc {
+    max-width: 360px;
+    color: var(--muted);
+    font-size: 13px;
+    font-family: var(--mono);
+    line-height: 1.7;
+    border-left: 2px solid var(--border);
+    padding-left: 16px;
+  }
+
+  /* ─── Section label ─────────────────────────────────────────────────────── */
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ─── Panel ─────────────────────────────────────────────────────────────── */
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+
+  /* ─── Toolbar ───────────────────────────────────────────────────────────── */
+  .toolbar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 36px;
+    margin-bottom: 20px;
+  }
+  .toolbar-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 8px 18px;
+    border-radius: 40px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    transition: var(--transition);
+  }
+  .toolbar-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .toolbar-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+
+  /* ─── Parameter grid ────────────────────────────────────────────────────── */
+  .param-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 14px;
+  }
+  .param-field { display: flex; flex-direction: column; gap: 5px; }
+  .param-field label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .param-field label .hint {
+    color: var(--border);
+    font-size: 9px;
+  }
+  .param-field input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 10px 12px;
+    transition: var(--transition);
+    outline: none;
+    width: 100%;
+  }
+  .param-field input:focus { border-color: var(--accent2); }
+  .param-field input.error { border-color: var(--danger); }
+  .param-field .error-msg {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--danger);
+    display: none;
+  }
+  .param-field.has-error .error-msg { display: block; }
+  .param-field.has-error input { border-color: var(--danger); }
+
+  /* ─── Randomise controls ────────────────────────────────────────────────── */
+  .rand-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+    align-items: center;
+  }
+  .rand-btn {
+    background: transparent;
+    border: 1px dashed var(--border);
+    color: var(--muted);
+    padding: 7px 16px;
+    border-radius: var(--radius);
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .rand-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+  .rand-btn svg { width: 13px; height: 13px; stroke: currentColor; fill: none; }
+  .rand-note { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: auto; }
+
+  /* ─── Run button ────────────────────────────────────────────────────────── */
+  .run-row { margin-top: 24px; display: flex; gap: 14px; align-items: center; }
+  .run-btn {
+    background: var(--accent);
+    border: none;
+    color: #000;
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: 0.05em;
+    padding: 14px 40px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: var(--transition);
+    text-transform: uppercase;
+  }
+  .run-btn:hover { background: #d4e83a; transform: translateY(-1px); }
+  .run-btn:active { transform: translateY(0); }
+  .run-btn:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; transform: none; }
+  .api-status { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .api-status .dot {
+    display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--muted);
+    margin-right: 6px; vertical-align: middle;
+  }
+  .api-status.live .dot { background: var(--success); box-shadow: 0 0 6px var(--success); }
+  .api-status.demo .dot { background: #f39c12; }
+
+  /* ─── Output section ────────────────────────────────────────────────────── */
+  #output-section { margin-top: 48px; }
+  .output-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 640px) { .output-grid { grid-template-columns: 1fr; } }
+  .pid-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: var(--transition);
+    position: relative;
+    overflow: hidden;
+  }
+  .pid-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.4s ease;
+  }
+  .pid-card.loaded::before { transform: scaleX(1); }
+  .pid-card .pid-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .pid-card .pid-value {
+    font-family: var(--mono);
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+  }
+  .pid-card .pid-name { font-size: 13px; color: var(--text); font-weight: 600; }
+  .pid-card .pid-interp { font-family: var(--mono); font-size: 10px; color: var(--muted); line-height: 1.5; }
+
+  /* ─── Confidence bar ────────────────────────────────────────────────────── */
+  .confidence-block { margin-top: 8px; }
+  .conf-header {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .conf-bar-track {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .conf-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    border-radius: 3px;
+    width: 0%;
+    transition: width 0.7s ease;
+  }
+
+  /* ─── Performance chart ─────────────────────────────────────────────────── */
+  .chart-panel { margin-top: 14px; }
+  #radar-canvas { display: block; width: 100%; max-width: 440px; margin: 0 auto; }
+
+  /* ─── Disturbance display ───────────────────────────────────────────────── */
+  .dist-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 8px;
+  }
+  @media (max-width: 640px) { .dist-grid { grid-template-columns: 1fr 1fr; } }
+  .dist-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+  .dist-card .d-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.15em; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; }
+  .dist-card .d-val { font-family: var(--mono); font-size: 20px; color: var(--text); }
+  .dist-card .d-unit { font-size: 11px; color: var(--muted); }
+
+  /* ─── Interpretation ────────────────────────────────────────────────────── */
+  .interp-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--text);
+    margin-top: 14px;
+  }
+  .interp-box strong { color: var(--accent); font-weight: 700; }
+
+  /* ─── Limitations ───────────────────────────────────────────────────────── */
+  .limit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+  @media (max-width: 640px) { .limit-grid { grid-template-columns: 1fr; } }
+  .limit-item {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+  }
+  .limit-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+  .limit-text { font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.6; }
+  .limit-text strong { color: var(--text); display: block; margin-bottom: 3px; }
+
+  /* ─── Loader ────────────────────────────────────────────────────────────── */
+  #loader {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  #loader.active { display: flex; }
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ─── Toast ─────────────────────────────────────────────────────────────── */
+  #toast {
+    position: fixed;
+    bottom: 32px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 40px;
+    padding: 10px 24px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    opacity: 0;
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
+    z-index: 1000;
+    white-space: nowrap;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.err { border-color: var(--danger); color: var(--danger); }
+
+  /* ─── Utility ───────────────────────────────────────────────────────────── */
+  .mt-36 { margin-top: 36px; }
+  .mt-48 { margin-top: 48px; }
+  .placeholder-text {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+    padding: 40px 20px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+  }
+  .badge {
+    display: inline-block;
+    background: rgba(232,255,71,0.1);
+    color: var(--accent);
+    border: 1px solid rgba(232,255,71,0.3);
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    padding: 2px 7px;
+    text-transform: uppercase;
+    vertical-align: middle;
+    margin-left: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       HEADER
+  ════════════════════════════════════════════════════════════════════════════ -->
+  <header>
+    <div class="logo-block">
+      <span class="logo-tag">ENGG2112 · ML Project</span>
+      <h1>Auto<span>PID</span></h1>
+    </div>
+    <p class="header-desc">
+      Input your vehicle parameters — the model predicts optimal steering PID gains
+      (Kp, Ki, Kd) in milliseconds, replacing an expensive numerical optimiser.
+    </p>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       INPUT PANEL
+  ════════════════════════════════════════════════════════════════════════════ -->
+
+  <!-- Mode toggle -->
+  <div class="toolbar">
+    <button class="toolbar-btn active" id="btn-manual" onclick="setMode('manual')">Manual Input</button>
+    <button class="toolbar-btn" id="btn-random" onclick="setMode('random')">Fully Randomise</button>
+    <span class="badge">9 parameters</span>
+  </div>
+
+  <div class="section-label">Vehicle Parameters</div>
+
+  <div class="panel">
+    <div class="param-grid" id="param-grid">
+      <!-- Fields injected by JS -->
+    </div>
+
+    <!-- Randomise individual fields row -->
+    <div class="rand-row" id="rand-row">
+      <button class="rand-btn" onclick="randomiseAll()">
+        <svg viewBox="0 0 24 24" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        Randomise All
+      </button>
+      <span class="rand-note">or randomise individual fields via ⟳ icon</span>
+    </div>
+
+    <div class="run-row">
+      <button class="run-btn" id="run-btn" onclick="runPrediction()">Predict PID Gains</button>
+      <div id="loader"><div class="spinner"></div>Running model…</div>
+      <!-- API status indicator — update this once backend is connected -->
+      <div class="api-status demo" id="api-status">
+        <span class="dot"></span>
+        <span id="api-status-text">Demo mode (no backend)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       OUTPUT SECTION
+  ════════════════════════════════════════════════════════════════════════════ -->
+  <div id="output-section">
+    <div class="mt-48 section-label">Steering PID Prediction</div>
+    <div id="result-area">
+      <div class="placeholder-text">
+        ↑ &nbsp;Fill in vehicle parameters and click "Predict PID Gains" to see results
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       LIMITATIONS
+  ════════════════════════════════════════════════════════════════════════════ -->
+  <div class="mt-48">
+    <div class="section-label">Model Limitations & Ethical Notes</div>
+    <div class="limit-grid">
+      <div class="limit-item">
+        <span class="limit-icon">⚠️</span>
+        <div class="limit-text">
+          <strong>Training distribution</strong>
+          Gains were optimised on simulated cars within defined ranges. Extrapolating outside these bounds (e.g. m > 4500 kg) may give unreliable predictions.
+        </div>
+      </div>
+      <div class="limit-item">
+        <span class="limit-icon">🌡️</span>
+        <div class="limit-text">
+          <strong>Simplified physics</strong>
+          The bicycle model omits tyre non-linearity, suspension dynamics, and load transfer. Real-world deployment requires hardware validation.
+        </div>
+      </div>
+      <div class="limit-item">
+        <span class="limit-icon">🔁</span>
+        <div class="limit-text">
+          <strong>Stationary model</strong>
+          The model does not adapt online. If a car's dynamics change (e.g. tyre wear), the predicted gains become stale.
+        </div>
+      </div>
+      <div class="limit-item">
+        <span class="limit-icon">🚗</span>
+        <div class="limit-text">
+          <strong>Safety critical context</strong>
+          PID gains from this tool are for research and demonstration only. Do not use in any real vehicle without exhaustive testing and regulatory sign-off.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+<!-- Toast notification -->
+<div id="toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     JAVASCRIPT
+════════════════════════════════════════════════════════════════════════════ -->
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Parameter definitions — names, labels, ranges, units
+// Ranges match exactly those used in MLPID_main.py / ML_DM_Comp.py
+// ─────────────────────────────────────────────────────────────────────────────
+const PARAMS = [
+  {
+    key: 'mass',
+    label: 'Mass',
+    unit: 'kg',
+    min: 800,   max: 4500,  step: 1,   decimals: 0,
+    hint: '800 – 4500',
+    desc: 'Vehicle kerb weight. Heavier vehicles require more aggressive speed control.'
+  },
+  {
+    key: 'max_acceleration',
+    label: 'Max Acceleration',
+    unit: 'm/s²',
+    min: 0.8,   max: 9.0,   step: 0.1, decimals: 2,
+    hint: '0.8 – 9.0',
+    desc: 'Peak longitudinal acceleration available from drivetrain.'
+  },
+  {
+    key: 'yaw_inertia',
+    label: 'Yaw Inertia',
+    unit: 'kg·m²',
+    min: 500,   max: 12000, step: 1,   decimals: 0,
+    hint: '≈ 0.22–0.32 × m × L²',
+    desc: 'Rotational inertia about the vertical axis. Higher values mean slower yaw response.'
+  },
+  {
+    key: 'length',
+    label: 'Wheelbase',
+    unit: 'm',
+    min: 2.2,   max: 4.8,   step: 0.01, decimals: 2,
+    hint: '2.2 – 4.8',
+    desc: 'Distance between front and rear axles.'
+  },
+  {
+    key: 'max_steering_stiffness_front',
+    label: 'Front Cornering Stiffness',
+    unit: 'N/rad',
+    min: 10000, max: 100000, step: 100, decimals: 0,
+    hint: '≈ 7–11 × front axle load',
+    desc: 'How aggressively the front tyres generate lateral force per unit slip angle.'
+  },
+  {
+    key: 'max_steering_stiffness_rear',
+    label: 'Rear Cornering Stiffness',
+    unit: 'N/rad',
+    min: 10000, max: 100000, step: 100, decimals: 0,
+    hint: '≈ 7–11 × rear axle load',
+    desc: 'Rear tyre lateral stiffness. Cf/Cr ratio determines over/understeer tendency.'
+  },
+  {
+    key: 'tyre_friction',
+    label: 'Tyre Friction (μ)',
+    unit: '',
+    min: 0.3,   max: 1.4,   step: 0.01, decimals: 2,
+    hint: '0.3 (ice) – 1.4 (dry)',
+    desc: 'Peak tyre–road friction coefficient. Determines max lateral and braking force.'
+  },
+  {
+    key: 'cd',
+    label: 'Drag Coefficient',
+    unit: '',
+    min: 0.18,  max: 0.55,  step: 0.01, decimals: 2,
+    hint: '0.18 – 0.55',
+    desc: 'Aerodynamic drag coefficient. Affects speed control effort at high speeds.'
+  },
+  {
+    key: 'cross_sectional_area',
+    label: 'Frontal Area',
+    unit: 'm²',
+    min: 1.6,   max: 3.8,   step: 0.01, decimals: 2,
+    hint: '1.6 – 3.8',
+    desc: 'Frontal cross-sectional area. Combined with Cd gives total aero drag.'
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Build input fields
+// ─────────────────────────────────────────────────────────────────────────────
+const grid = document.getElementById('param-grid');
+
+PARAMS.forEach(p => {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'param-field';
+  wrapper.id = `field-${p.key}`;
+  wrapper.innerHTML = `
+    <label for="inp-${p.key}">
+      ${p.label}${p.unit ? ' (' + p.unit + ')' : ''}
+      <span class="hint">${p.hint}</span>
+    </label>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <input
+        type="number"
+        id="inp-${p.key}"
+        min="${p.min}" max="${p.max}" step="${p.step}"
+        placeholder="${((p.min + p.max)/2).toFixed(p.decimals)}"
+        oninput="validateField('${p.key}')"
+        title="${p.desc}"
+      />
+      <button
+        class="rand-btn" style="padding:8px 10px;flex-shrink:0;"
+        onclick="randomiseField('${p.key}')"
+        title="Randomise ${p.label}">
+        <svg viewBox="0 0 24 24" stroke-width="2.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+      </button>
+    </div>
+    <span class="error-msg" id="err-${p.key}"></span>
+  `;
+  grid.appendChild(wrapper);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mode switching
+// ─────────────────────────────────────────────────────────────────────────────
+function setMode(mode) {
+  document.getElementById('btn-manual').classList.toggle('active', mode === 'manual');
+  document.getElementById('btn-random').classList.toggle('active', mode === 'random');
+  if (mode === 'random') randomiseAll();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Randomisation helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function rng(min, max, decimals) {
+  const val = min + Math.random() * (max - min);
+  return parseFloat(val.toFixed(decimals));
+}
+
+// Generate a physically consistent car (mirrors MLPID_main.py logic)
+function generateConsistentCar() {
+  const m = Math.round(rng(800, 4500, 0));
+  const L = rng(2.2, 4.8, 2);
+  const mu = rng(0.3, 1.4, 2);
+  const Cd = rng(0.18, 0.55, 2);
+  const A = rng(1.6, 3.8, 2);
+  const max_accel = rng(0.8, 9.0, 2);
+
+  // Derived Iz: k * m * L^2 (k = 0.22–0.32)
+  const k_Iz = rng(0.22, 0.32, 4);
+  const Iz = Math.round(k_Iz * m * L * L);
+
+  // Derived cornering stiffness from axle loads
+  const g = 9.81;
+  const front_frac = rng(0.45, 0.60, 3);
+  const Lr = front_frac * L;
+  const Lf = L - Lr;
+  const Fz_front = m * g * (Lr / L);
+  const Fz_rear  = m * g * (Lf / L);
+  const c_front = rng(7.0, 11.0, 2);
+  const c_rear  = rng(7.0, 11.0, 2);
+  const Cf = Math.round(c_front * Fz_front);
+  const Cr = Math.round(c_rear * Fz_rear);
+
+  return { mass: m, max_acceleration: max_accel, yaw_inertia: Iz,
+           length: L, max_steering_stiffness_front: Cf,
+           max_steering_stiffness_rear: Cr, tyre_friction: mu,
+           cd: Cd, cross_sectional_area: A };
+}
+
+function randomiseAll() {
+  const car = generateConsistentCar();
+  PARAMS.forEach(p => {
+    const inp = document.getElementById(`inp-${p.key}`);
+    inp.value = car[p.key];
+    validateField(p.key);
+  });
+  showToast('All parameters randomised');
+}
+
+function randomiseField(key) {
+  const car = generateConsistentCar();
+  const inp = document.getElementById(`inp-${key}`);
+  inp.value = car[key];
+  validateField(key);
+  showToast(`${PARAMS.find(p=>p.key===key).label} randomised`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Validation
+// ─────────────────────────────────────────────────────────────────────────────
+function validateField(key) {
+  const p = PARAMS.find(x => x.key === key);
+  const inp = document.getElementById(`inp-${key}`);
+  const errEl = document.getElementById(`err-${key}`);
+  const wrapper = document.getElementById(`field-${key}`);
+  const val = parseFloat(inp.value);
+
+  if (inp.value === '' || isNaN(val)) {
+    wrapper.classList.add('has-error');
+    errEl.textContent = 'Required — enter a numeric value';
+    return false;
+  }
+  if (val < p.min) {
+    wrapper.classList.add('has-error');
+    errEl.textContent = `Must be ≥ ${p.min} ${p.unit}`;
+    return false;
+  }
+  if (val > p.max) {
+    wrapper.classList.add('has-error');
+    errEl.textContent = `Must be ≤ ${p.max} ${p.unit}`;
+    return false;
+  }
+  wrapper.classList.remove('has-error');
+  errEl.textContent = '';
+  return true;
+}
+
+function validateAll() {
+  return PARAMS.every(p => validateField(p.key));
+}
+
+function collectValues() {
+  const out = {};
+  PARAMS.forEach(p => { out[p.key] = parseFloat(document.getElementById(`inp-${p.key}`).value); });
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEMO PLACEHOLDER — predicts PID gains using simplified heuristics
+// ─────────────────────────────────────────────────────────────────────────────
+// ← CONNECT YOUR BACKEND HERE
+// Replace the body of this function with a fetch() to your Flask/FastAPI server:
+//
+//   const response = await fetch('http://localhost:5000/predict', {
+//     method: 'POST',
+//     headers: { 'Content-Type': 'application/json' },
+//     body: JSON.stringify(carParams)
+//   });
+//   const data = await response.json();
+//   return { kp: data.steer_kp, ki: data.steer_ki, kd: data.steer_kd,
+//            confidence: data.confidence };
+//
+// Flask endpoint example (api.py):
+//   from flask import Flask, request, jsonify
+//   from flask_cors import CORS
+//   from ML import predict_optimal_pid
+//   app = Flask(__name__); CORS(app)
+//   @app.route('/predict', methods=['POST'])
+//   def predict():
+//       car = request.get_json()
+//       result = predict_optimal_pid(car)
+//       return jsonify({ steer_kp: result['steer_kp'], ... })
+//   app.run(port=5000)
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchPrediction(carParams) {
+  // ── DEMO LOGIC (replace with real API call above) ─────────────────────────
+  // These heuristics loosely mirror the physics intuition encoded in the model.
+  await new Promise(r => setTimeout(r, 700)); // simulate latency
+
+  const m   = carParams.mass;
+  const Iz  = carParams.yaw_inertia;
+  const L   = carParams.length;
+  const Cf  = carParams.max_steering_stiffness_front;
+  const Cr  = carParams.max_steering_stiffness_rear;
+  const mu  = carParams.tyre_friction;
+
+  // Yaw factor ~ how "snappy" the car is
+  const yaw_factor   = Iz / (m * L * L);
+  const steer_bal    = Cf / (Cr + 1e-9);
+  const lat_grip     = mu * (Cf + Cr) / m;
+
+  // Heuristic PID from physical intuition
+  const kp = Math.max(50,  Math.min(900,  180 * (1 / yaw_factor) * mu));
+  const ki = Math.max(10,  Math.min(60,   20  + 8 * (1 / yaw_factor)));
+  const kd = Math.max(1,   Math.min(45,   5   + 12 * yaw_factor));
+
+  // Confidence: higher when parameters are well within training distribution
+  const mass_norm  = (m - 800)   / (4500 - 800);
+  const L_norm     = (L - 2.2)   / (4.8 - 2.2);
+  const conf_base  = 1 - 0.3 * Math.abs(mass_norm - 0.5) - 0.2 * Math.abs(L_norm - 0.5);
+  const confidence = Math.round(Math.max(55, Math.min(97, conf_base * 100)));
+
+  return {
+    kp: parseFloat(kp.toFixed(2)),
+    ki: parseFloat(ki.toFixed(2)),
+    kd: parseFloat(kd.toFixed(2)),
+    confidence,
+    // Also return some "other variable" outputs similar to wind/road displayed in Car.py
+    // These are illustrative disturbance samples for the display
+    sim_speed_error:   parseFloat((2.1 + Math.random() * 3.5).toFixed(2)),
+    sim_heading_error: parseFloat((4.2 + Math.random() * 8.0).toFixed(2)),
+    sim_yaw_rate_err:  parseFloat((0.05 + Math.random() * 0.15).toFixed(3)),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main prediction runner
+// ─────────────────────────────────────────────────────────────────────────────
+async function runPrediction() {
+  if (!validateAll()) {
+    showToast('Fix validation errors before running', true);
+    return;
+  }
+
+  const carParams = collectValues();
+  const btn    = document.getElementById('run-btn');
+  const loader = document.getElementById('loader');
+
+  btn.disabled = true;
+  loader.classList.add('active');
+
+  try {
+    const result = await fetchPrediction(carParams);
+    renderOutput(result, carParams);
+  } catch (e) {
+    showToast('Prediction failed — check console', true);
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+    loader.classList.remove('active');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Render output
+// ─────────────────────────────────────────────────────────────────────────────
+function renderOutput(result, car) {
+  const area = document.getElementById('result-area');
+
+  // Gain interpretation helper
+  function interpKp(v) { return v > 600 ? 'Aggressive correction' : v > 200 ? 'Balanced response' : 'Gentle correction'; }
+  function interpKi(v) { return v > 40  ? 'Strong integral action' : v > 20  ? 'Moderate wind-up' : 'Light integration'; }
+  function interpKd(v) { return v > 30  ? 'Heavy damping' : v > 12  ? 'Moderate damping' : 'Light damping'; }
+
+  // Steer balance label
+  const steerBal = car.max_steering_stiffness_front / car.max_steering_stiffness_rear;
+  const balLabel = steerBal > 1.1 ? 'Understeer-prone' : steerBal < 0.9 ? 'Oversteer-prone' : 'Neutral balanced';
+
+  area.innerHTML = `
+    <!-- PID cards -->
+    <div class="output-grid">
+      <div class="pid-card" id="card-kp">
+        <span class="pid-label">Proportional Gain</span>
+        <span class="pid-value" id="val-kp">—</span>
+        <span class="pid-name">K<sub>p</sub> &nbsp;·&nbsp; Steer</span>
+        <span class="pid-interp">${interpKp(result.kp)}<br/>Scales with heading error</span>
+      </div>
+      <div class="pid-card" id="card-ki">
+        <span class="pid-label">Integral Gain</span>
+        <span class="pid-value" id="val-ki">—</span>
+        <span class="pid-name">K<sub>i</sub> &nbsp;·&nbsp; Steer</span>
+        <span class="pid-interp">${interpKi(result.ki)}<br/>Eliminates steady-state offset</span>
+      </div>
+      <div class="pid-card" id="card-kd">
+        <span class="pid-label">Derivative Gain</span>
+        <span class="pid-value" id="val-kd">—</span>
+        <span class="pid-name">K<sub>d</sub> &nbsp;·&nbsp; Steer</span>
+        <span class="pid-interp">${interpKd(result.kd)}<br/>Damps heading oscillations</span>
+      </div>
+    </div>
+
+    <!-- Confidence -->
+    <div class="panel confidence-block">
+      <div class="conf-header">
+        <span>Model confidence (within training distribution)</span>
+        <span id="conf-pct">0%</span>
+      </div>
+      <div class="conf-bar-track">
+        <div class="conf-bar-fill" id="conf-fill"></div>
+      </div>
+      <p style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:8px;">
+        Confidence reflects how close this car's parameters are to the 500-car training set.
+        Values near the bounds of any parameter reduce confidence.
+      </p>
+    </div>
+
+    <!-- Radar chart + other outputs side-by-side -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;" class="chart-panel">
+      <div class="panel">
+        <div class="section-label" style="margin-bottom:12px;">PID Balance</div>
+        <canvas id="radar-canvas" height="220"></canvas>
+      </div>
+      <div class="panel">
+        <div class="section-label" style="margin-bottom:12px;">Other Outputs (Speed Controller + Disturbances)</div>
+        <div class="dist-grid" style="grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="dist-card">
+            <div class="d-label">Speed Error (sim)</div>
+            <div class="d-val">${result.sim_speed_error} <span class="d-unit">m/s·s</span></div>
+          </div>
+          <div class="dist-card">
+            <div class="d-label">Heading Error (sim)</div>
+            <div class="d-val">${result.sim_heading_error} <span class="d-unit">rad·s</span></div>
+          </div>
+          <div class="dist-card">
+            <div class="d-label">Yaw Rate Error</div>
+            <div class="d-val">${result.sim_yaw_rate_err} <span class="d-unit">rad/s·s</span></div>
+          </div>
+          <div class="dist-card">
+            <div class="d-label">Steer Balance</div>
+            <div class="d-val" style="font-size:13px;">${balLabel}</div>
+          </div>
+          <div class="dist-card">
+            <div class="d-label">Yaw Factor</div>
+            <div class="d-val">${(car.yaw_inertia / (car.mass * car.length**2)).toFixed(3)}</div>
+          </div>
+          <div class="dist-card">
+            <div class="d-label">Aero Drag Proxy</div>
+            <div class="d-val">${(car.cd * car.cross_sectional_area).toFixed(3)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stakeholder interpretation -->
+    <div class="section-label mt-36">Plain-English Interpretation</div>
+    <div class="interp-box">
+      This <strong>${car.mass} kg</strong> vehicle has a wheelbase of <strong>${car.length} m</strong>
+      and operates on surfaces with friction μ = <strong>${car.tyre_friction}</strong>.
+      The model predicts a <strong>${interpKp(result.kp).toLowerCase()} steering controller</strong> (Kp = ${result.kp}).
+      The integral term (Ki = ${result.ki}) will ${result.ki > 30 ? 'aggressively' : 'gently'} correct
+      persistent heading offsets caused by wind or road camber.
+      The derivative term (Kd = ${result.kd}) provides ${interpKd(result.kd).toLowerCase()}
+      to prevent the steering from oscillating.
+      Overall, the model is <strong>${result.confidence}% confident</strong> these gains are
+      near-optimal for this vehicle configuration, based on the 500 cars it was trained on.
+    </div>
+  `;
+
+  // Animate values with count-up
+  animateValue('val-kp', result.kp, 2);
+  animateValue('val-ki', result.ki, 2);
+  animateValue('val-kd', result.kd, 2);
+
+  // Confidence bar
+  setTimeout(() => {
+    document.getElementById('conf-fill').style.width = result.confidence + '%';
+    document.getElementById('conf-pct').textContent = result.confidence + '%';
+  }, 100);
+
+  // Animate card top borders
+  setTimeout(() => {
+    ['card-kp','card-ki','card-kd'].forEach((id,i) => {
+      setTimeout(() => document.getElementById(id).classList.add('loaded'), i * 120);
+    });
+  }, 200);
+
+  // Draw radar chart
+  setTimeout(() => drawRadar(result), 300);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Radar chart — normalise Kp, Ki, Kd against their typical ranges
+// ─────────────────────────────────────────────────────────────────────────────
+function drawRadar(result) {
+  const canvas = document.getElementById('radar-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth; canvas.width = W; canvas.height = 220;
+  const cx = W/2, cy = 110, R = Math.min(W/2, 100) - 24;
+
+  const labels = ['Kp', 'Ki', 'Kd'];
+  const maxes  = [900, 65, 50]; // practical max for normalisation
+  const vals   = [result.kp, result.ki, result.kd];
+  const norms  = vals.map((v,i) => Math.min(1, v / maxes[i]));
+
+  const angles = labels.map((_, i) => (i * 2 * Math.PI / 3) - Math.PI/2);
+
+  // Grid circles
+  ctx.strokeStyle = '#252b38';
+  ctx.lineWidth = 1;
+  [0.25, 0.5, 0.75, 1.0].forEach(r => {
+    ctx.beginPath();
+    angles.forEach((a, i) => {
+      const x = cx + Math.cos(a) * R * r;
+      const y = cy + Math.sin(a) * R * r;
+      i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    ctx.closePath();
+    ctx.stroke();
+  });
+
+  // Spokes
+  angles.forEach(a => {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R);
+    ctx.strokeStyle = '#252b38';
+    ctx.stroke();
+  });
+
+  // Data polygon
+  ctx.beginPath();
+  angles.forEach((a, i) => {
+    const x = cx + Math.cos(a) * R * norms[i];
+    const y = cy + Math.sin(a) * R * norms[i];
+    i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(232,255,71,0.12)';
+  ctx.fill();
+  ctx.strokeStyle = '#e8ff47';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Points
+  angles.forEach((a, i) => {
+    const x = cx + Math.cos(a) * R * norms[i];
+    const y = cy + Math.sin(a) * R * norms[i];
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI*2);
+    ctx.fillStyle = '#e8ff47';
+    ctx.fill();
+  });
+
+  // Labels
+  ctx.font = 'bold 12px Space Mono, monospace';
+  ctx.fillStyle = '#e8eaf0';
+  ctx.textAlign = 'center';
+  angles.forEach((a, i) => {
+    const lx = cx + Math.cos(a) * (R + 18);
+    const ly = cy + Math.sin(a) * (R + 18) + 4;
+    ctx.fillText(`${labels[i]} = ${vals[i]}`, lx, ly);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Count-up animation
+// ─────────────────────────────────────────────────────────────────────────────
+function animateValue(id, target, decimals, duration = 600) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const start = performance.now();
+  function update(now) {
+    const t = Math.min((now - start) / duration, 1);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = (eased * target).toFixed(decimals);
+    if (t < 1) requestAnimationFrame(update);
+  }
+  requestAnimationFrame(update);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Toast
+// ─────────────────────────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, err = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show' + (err ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = ''; }, 2200);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Check if backend is available (fires on page load)
+// ─────────────────────────────────────────────────────────────────────────────
+// ← UPDATE this URL to match your Flask server address
+const BACKEND_URL = 'http://localhost:5000/predict';
+
+async function checkBackend() {
+  try {
+    const r = await fetch(BACKEND_URL.replace('/predict', '/health'), { method: 'GET', signal: AbortSignal.timeout(1500) });
+    if (r.ok) {
+      const el = document.getElementById('api-status');
+      el.className = 'api-status live';
+      document.getElementById('api-status-text').textContent = 'Backend connected';
+    }
+  } catch { /* stays in demo mode */ }
+}
+checkBackend();
+</script>
+</body>
+</html>
