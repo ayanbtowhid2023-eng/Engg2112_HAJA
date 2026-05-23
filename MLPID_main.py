@@ -1,5 +1,3 @@
-# MLPID_main.py
-
 """
 Offline Optimal PID Dataset Generator
 =====================================
@@ -30,7 +28,7 @@ from scipy.optimize import differential_evolution, minimize
 import matplotlib.pyplot as plt
 
 from Car import Car
-from ML import CAR_PARAM_COLS, train_direct_pid_models
+from ML_rewrite import CAR_PARAM_COLS, train_direct_pid_models
 
 
 # -----------------------------------------------------------------------------
@@ -39,7 +37,7 @@ from ML import CAR_PARAM_COLS, train_direct_pid_models
 
 OUTPUT_CSV = "optimal_pid_dataset.csv"
 
-NUM_CARS = 10     
+NUM_CARS = 200   
 N_PROFILE_RUNS = 5    
 DT = 0.02        
 T = 90                  
@@ -237,7 +235,7 @@ SHARED_DISTURBANCE_PROFILES = [
 # Fixed baseline values used while optimising the other loop.
 # These do not need to be perfect; they just keep the other loop stable.
 BASE_STEER_PID = (350, 25, 20)
-BASE_SPEED_PID = (40, 900, 0)
+BASE_SPEED_PID = (40, 0, 0)
 
 STEER_BOUNDS = [
     (0, 1000),  # kp
@@ -247,7 +245,7 @@ STEER_BOUNDS = [
 
 SPEED_BOUNDS = [
     (0, 200),  # kp
-    (500, 1500),   # ki
+    (0, 5000),   # ki
     (0, 2),   # kd
 ]
 
@@ -524,22 +522,20 @@ def plot_drive_conditions_stacked(times, states, target_speeds, wind_longs, wind
     )
 
     # ---------------------------
-    # 1. Speed plot
+    # 2. Target heading
     # ---------------------------
-    ax1.plot(times, speed, label="Actual Speed [m/s]", linewidth=2)
-    ax1.plot(times, target_speeds, label="Target Speed [m/s]", linewidth=2)
-
-    ax1.set_ylabel("Speed [m/s]")
-    ax1.set_title("Vehicle Performance and Disturbances")
+    ax1.plot(times, psis, label="True heading [deg]", linewidth=2)
+    ax1.plot(times, target_heading_deg, label="Target heading [deg]", linewidth=2)
+    ax1.set_ylabel("Target Heading [deg]")
+    ax1.set_title("Optimal Vehicle Performance and Disturbances")
     ax1.legend()
     ax1.grid(True)
 
     # ---------------------------
-    # 2. Target heading
+    # 1. Speed plot
     # ---------------------------
-    ax2.plot(times, psis, label="True heading [deg]", linewidth=2)
-    ax2.plot(times, target_heading_deg, label="Target heading [deg]", linewidth=2)
-    ax2.set_ylabel("Target Heading [deg]")
+    ax2.plot(times, speed, label="Speed [m/s]", linewidth=2)
+    ax2.set_ylabel("Speed Variation ")
     ax2.legend()
     ax2.grid(True)
 
@@ -704,7 +700,7 @@ def optimise_car_pid(
         speed_pid=speed_pid,
         target_profiles=target_profiles,
         disturbance_profiles=disturbance_profiles,
-        plot=False,
+        plot=True,
     )
 
     return {
@@ -724,19 +720,20 @@ def optimise_car_pid(
 # -----------------------------------------------------------------------------
 
 def write_header(writer: csv.writer) -> None:
-    writer.writerow(
-        CAR_PARAM_COLS
-        + [
-            "opt_steer_kp",
-            "opt_steer_ki",
-            "opt_steer_kd",
-            "opt_speed_kp",
-            "opt_speed_ki",
-            "opt_speed_kd",
-            "best_speed_error",
-            "best_heading_error",
-        ]
-    )
+    return
+    # writer.writerow(
+    #     CAR_PARAM_COLS
+    #     + [
+    #         "opt_steer_kp",
+    #         "opt_steer_ki",
+    #         "opt_steer_kd",
+    #         "opt_speed_kp",
+    #         "opt_speed_ki",
+    #         "opt_speed_kd",
+    #         "best_speed_error",
+    #         "best_heading_error",
+    #     ]
+    # )
 
 
 def generate_optimal_pid_dataset(output_csv: str = OUTPUT_CSV, num_cars: int = NUM_CARS) -> None:
@@ -796,4 +793,4 @@ if __name__ == "__main__":
         speed_model_path="direct_speed_pid_model.pkl",
     )
 
-    plt.show()
+    # plt.show()
