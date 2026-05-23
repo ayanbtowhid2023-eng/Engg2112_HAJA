@@ -28,7 +28,7 @@ from scipy.optimize import differential_evolution, minimize
 import matplotlib.pyplot as plt
 
 from Car import Car
-from ML_rewrite import CAR_PARAM_COLS, train_direct_pid_models
+from ML import CAR_PARAM_COLS, train_direct_pid_models
 
 
 # -----------------------------------------------------------------------------
